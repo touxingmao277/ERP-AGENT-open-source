@@ -134,59 +134,10 @@ def bootstrap_sandbox(sandbox) -> None:
 
 def _load_skills_prompt(skills_dir: Path) -> str:
     """
-    手动加载所有 SKILL.md 文件内容，拼接为提示词段落。
-    解决框架内置 skills 加载器无法解析含中文/空格路径的问题。
+    兼容入口：仅返回基础技能元数据，不读取正文注入提示词。
     """
-    if not skills_dir.exists():
-        return ""
-
-    skill_sections = []
-    for skill_md in sorted(skills_dir.rglob("SKILL.md")):
-        try:
-            content = skill_md.read_text(encoding="utf-8").strip()
-            if content:
-                # 用相对路径作为技能标识
-                rel_path = str(skill_md.relative_to(skills_dir))
-                skill_sections.append(f"### Skill: {rel_path}\n{content}")
-        except Exception as e:
-            agent_logger.warning(f"Failed to load skill {skill_md}: {e}")
-
-    # 也加载独立的 .md 技能文件（非 SKILL.md）
-    for md_file in sorted(skills_dir.rglob("*.md")):
-        if md_file.name == "SKILL.md":
-            continue  # 已处理
-        try:
-            content = md_file.read_text(encoding="utf-8").strip()
-            if content and len(content) > 20:
-                rel_path = str(md_file.relative_to(skills_dir))
-                skill_sections.append(f"### Skill: {rel_path}\n{content}")
-        except Exception:
-            pass
-
-    if not skill_sections:
-        return ""
-
-    # 构建技能摘要列表（name + description）
-    import re as _re
-    skill_summary = []
-    for section in skill_sections:
-        name_match = _re.search(r"name: (\S+)", section)
-        desc_match = _re.search(r"description: (.+)", section)
-        name = name_match.group(1) if name_match else "?"
-        desc = desc_match.group(1) if desc_match else ""
-        if name not in ("skill-name", "str", "?"):
-            skill_summary.append(f"- **{name}**: {desc}")
-
-    summary_block = "\n".join(skill_summary) if skill_summary else ""
-
-    return (
-        "\n\n---\n\n"
-        "## 可用技能 (Skills)\n\n"
-        "以下基础技能已同步到沙箱 **/skills/** 目录，可通过沙箱执行。"
-        "用户自行安装的技能位于 **/skills/custom/**，可通过 ``list_user_skills`` 查询：\n\n"
-        + (summary_block + "\n\n---\n\n" if summary_block else "")
-        + "\n\n".join(skill_sections)
-    )
+    from .progressive_skills import SkillCatalog
+    return SkillCatalog(skills_dir).index()
 
 
 async def precompute_agent_context(
@@ -330,14 +281,25 @@ def create_main_agent(
         custom_tools.extend([read_memory, remember])
     all_tools = mcp_tools + custom_tools
 
+    # Prompt disclosure is independent from physical sandbox file synchronization.
+    from .progressive_skills import (
+        SkillCatalog, ProgressiveSkillsMiddleware, attach_to_subagents, SLOT,
+    )
+    skill_catalog = SkillCatalog(SKILLS_DIR, store=store, user_id=user_context.user_id,
+                                 sandbox=managed_sandbox)
+    skill_read_tools = skill_catalog.tools()
+    all_tools.extend(skill_read_tools)
+
     agent_logger.info(
-        f"Tools loaded: {len(mcp_tools)} MCP + {len(custom_tools)} custom = {len(all_tools)} total"
+        f"Tools loaded: {len(mcp_tools)} MCP + {len(custom_tools)} custom + "
+        f"{len(skill_read_tools)} skill readers = {len(all_tools)} total"
     )
 
     # ===== 4. 加载子Agent配置 =====
     from .subagents.loader import load_subagent_configs, resolve_subagent_tools, get_delegation_context_prompt
     subagent_configs = load_subagent_configs()
     subagents = resolve_subagent_tools(subagent_configs, all_tools)
+    attach_to_subagents(subagents, skill_catalog, skill_read_tools)
     # 生成委派上下文协议（注入主 Agent 提示词）
     delegation_prompt = get_delegation_context_prompt(subagent_configs)
 
@@ -400,6 +362,7 @@ def create_main_agent(
         HarnessPhaseMiddleware(router_model=router_llm),               # 2. 混合路由 + rubric 注入
         ContextInjectionMiddleware(user_context=user_context),        # 3. 用户上下文注入
         WarmMemoryMiddleware(store=store, user_id=user_context.user_id),
+        ProgressiveSkillsMiddleware(skill_catalog),
         skills_sync_middleware,                                       # 4. 基础 Skills 同步
         user_skills_restore_middleware,                               # 5. 用户 Skills 恢复
         ToolsSummarizationMiddleware(),                               # 6. 摘要监控
@@ -429,16 +392,12 @@ def create_main_agent(
     if delegation_prompt:
         system_prompt += delegation_prompt
 
-    # ===== 6.5 手动加载 Skill 内容注入提示词 =====
-    # 框架内置 skills 加载器无法解析含中文/空格的路径，改为手动加载
-    skills_prompt = _load_skills_prompt(SKILLS_DIR)
-    if skills_prompt:
-        system_prompt += skills_prompt
-        agent_logger.info(f"Skills loaded into prompt from {SKILLS_DIR}")
+    # ===== 6.5 仅注入动态目录占位符，正文/资源由只读工具按需返回 =====
+    system_prompt += "\n" + SLOT
 
     # ===== 7. 创建 Agent =====
-    # ❌ 不传 skills 参数（框架内置 SkillsMiddleware 无法处理含中文路径）
-    # ✅ Skills 通过 _load_skills_prompt 注入 system_prompt + SkillsSyncMiddleware 同步到沙箱
+    # 自定义渐进披露支持中文路径；不再把全部 SKILL.md 放入系统提示。
+    # skills=None 防止框架与本项目双重加载；文件仍由原同步/恢复中间件准备。
     agent = create_deep_agent(
         model=llm,
         tools=all_tools,
