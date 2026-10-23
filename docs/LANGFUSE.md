@@ -28,7 +28,7 @@ SDK异步批量发送，网络失败不作为业务失败；退出最多等待3�
 
 ## 评测报告导入
 
-`python -m evals.upload_langfuse --suite business` 默认只读预览36条；`--suite routing` 预览200样本的两模型共400条记录。确认后加 `--send` 上传。上传仅固定历史报告的指标和分数，不伪装新执行，不发送正文。重复运行会创建新的导入，比较时按batch、split和provider筛选。
+`python -m evals.upload_langfuse --suite business` 默认只读预览36条；`--suite routing` 预览 800 条路由合成样本的评测记录。确认后加 `--send` 上传。上传仅固定历史报告的指标和分数，不伪装新执行，不发送正文。重复运行会创建新的导入，比较时按batch、split和provider筛选。
 
 本版优先实现元数据和评分；合成正文上传暂不开放，以避免误把文件路径中的业务内容当成测试资料。开发测试：`python -m unittest src.test.test_observability -q`。
 
@@ -39,7 +39,7 @@ SDK异步批量发送，网络失败不作为业务失败；退出最多等待3�
 ### 2026-10-23 接入验证记录
 
 - 完成云端认证和 LangGraph 脚本化模型冒烟测试；云端可见请求、链路与模型的 4 条 observation，检查其 input/output 均为空。此次冒烟不调用真实 ERP，也不消耗对话模型额度。
-- 已导入 36 条业务历史报告及 400 条路由历史报告（200 个样本 × 2 个模型），云端核对共 436 条历史 observation；这些是既有结果导入，不是新执行的 436 次任务。
+- 已导入 36 条业务历史报告及 800 条路由历史报告，云端核对共 836 条历史 observation；这些是既有结果导入，不是新执行的 836 次任务。
 - 回归覆盖遥测开关、数据脱敏、并发上下文隔离、异常状态，以及 Skills、沙箱生命周期、记忆、业务评测与路由逻辑。未以本次验证替代真实 Docker 故障切换或 ERP 写入全链路验收。
 
 本地后端需要重启，运行中的旧进程不会自动加载这些修改。重启后发起一个简单对话，在 Langfuse 的 Traces 中按 `erp.request` 查看；同一会话的请求可通过 Sessions 关联。模型未返回 usage 时，不会凭空生成 Token 或成本数字。关闭 `ERP_LANGFUSE_ENABLED` 并重启即可停止应用遥测。
