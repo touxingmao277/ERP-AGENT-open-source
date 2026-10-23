@@ -4,6 +4,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage
 from ..memory.keeper import MemoryKeeper
 from ..log_utils import middleware_logger
+from ..observability import measured, event
 
 WARM_MEMORY_SLOT = "<!-- LIVE_USER_MEMORY -->"
 
@@ -13,6 +14,7 @@ class WarmMemoryMiddleware(AgentMiddleware):
         self._store = store
         self._user_id = user_id
 
+    @measured('memory.refresh')
     def _refresh(self, request):
         brief = "（暂无跨会话记忆）"
         if self._store is not None:
@@ -22,6 +24,7 @@ class WarmMemoryMiddleware(AgentMiddleware):
                 brief = keeper.build_warm_brief()[:4000] or brief
             except Exception as exc:
                 middleware_logger.warning(f"Warm memory unavailable: {exc}")
+        event('memory.inject', characters=len(brief))
         # Preserve structured system-message blocks added by other middleware.
         message = request.system_message
         blocks = list(message.content_blocks) if message else []

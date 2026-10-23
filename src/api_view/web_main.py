@@ -66,6 +66,8 @@ async def lifespan(app: FastAPI):
                 await maintenance_task
         # 不销毁已认领容器：Manager 会把 user → container 映射持久化，重启后可恢复。
         await close_mongo_client()
+        from ..agent.observability import shutdown
+        await shutdown()
 
 
 app = FastAPI(

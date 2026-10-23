@@ -9,6 +9,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, Runtime
 
 from ..log_utils import middleware_logger
+from ..observability import measured
 
 
 class SandboxHealthMiddleware(AgentMiddleware):
@@ -55,6 +56,7 @@ class SandboxHealthMiddleware(AgentMiddleware):
         await asyncio.to_thread(self._check_and_recover)
         return None
 
+    @measured('sandbox.health')
     def _check_and_recover(self) -> None:
         # LocalShell fallback 没有 Manager，保持原有开发模式语义。
         if self._sandbox_manager is None or self._sandbox_backend is None:
@@ -88,6 +90,7 @@ class SandboxHealthMiddleware(AgentMiddleware):
 
         self._rebuild_sandbox()
 
+    @measured('sandbox.recovery')
     def _rebuild_sandbox(self) -> None:
         """重建、热替换并重新填充沙箱；任一环节失败都会在下一次请求重试。"""
         try:

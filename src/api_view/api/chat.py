@@ -39,6 +39,10 @@ PHASE_LABELS = {
 }
 
 
+from ...agent.observability import traced_stream, traced_config, event
+
+
+@traced_stream
 async def stream_chat_response(
     message: str,
     thread_id: str,
@@ -59,7 +63,11 @@ async def stream_chat_response(
     """
     # 每个用户有独立 Agent（含 Proxy、中间件缓存和 SandboxManager 映射）。
     session = await agent_loader.get_session(user_id, username)
-    config = agent_loader.create_config(thread_id, user_id)
+    config = traced_config(agent_loader.create_config(thread_id, user_id))
+    if resume_data is not None:
+        decisions = resume_data.get('decisions', []) if isinstance(resume_data, dict) else []
+        event('hitl.resume', approved=any(d.get('type')=='approve' for d in decisions if isinstance(d,dict)),
+              rejected=any(d.get('type')=='reject' for d in decisions if isinstance(d,dict)))
 
     # 加载已有消息（恢复场景）或初始化
     if resume_data:
@@ -91,7 +99,10 @@ async def stream_chat_response(
     from ...agent.backends.sandbox_manager import sandbox_manager
     from ...agent.runtime_context import bind_runtime, reset_runtime
 
+    import time
+    lock_started = time.perf_counter()
     await session.run_lock.acquire()
+    event('request.lock_wait', duration_ms=(time.perf_counter()-lock_started)*1000)
     lease_acquired = sandbox_manager.acquire_lease(user_id)
     sandbox_token = bind_sandbox(user_id)
     runtime_tokens = bind_runtime(user_id, agent_loader.store)
@@ -111,6 +122,7 @@ async def stream_chat_response(
                 if isinstance(chunk, dict):
                     if not namespace and chunk.get("review_decision"):
                         decision = chunk["review_decision"]
+                        event('review.decision', review=decision.get('decision')=='review')
                         signature = json.dumps(decision, ensure_ascii=False, sort_keys=True)
                         if signature != last_review_sig:
                             last_review_sig = signature
@@ -154,8 +166,10 @@ async def stream_chat_response(
                                 })
 
                     # --- 中断检测 ---
-                    if chunk.get("interrupts"):
-                        for interrupt_item in chunk["interrupts"]:
+                    # LangGraph emits __interrupt__; retain the legacy state key.
+                    interrupts = chunk.get("__interrupt__") or chunk.get("interrupts")
+                    if interrupts:
+                        for interrupt_item in interrupts:
                             interrupt_value = (
                                 interrupt_item.value
                                 if hasattr(interrupt_item, "value")
@@ -206,12 +220,14 @@ async def stream_chat_response(
                 if isinstance(chunk, dict):
                     ev_type = chunk.get("type", "")
                     if ev_type == "rubric_evaluation_start":
+                        event('grader.start')
                         # 评审器开始 grading → 进入审查阶段
                         if phase != "reviewing":
                             phase = "reviewing"
                             last_phase = "reviewing"
                             yield sse_event("phase", {"phase": "reviewing", "label": "🔍 审查中"})
                     elif ev_type == "rubric_evaluation_end":
+                        event('grader.end', satisfied=chunk.get('result')=='satisfied', iteration=chunk.get('iteration',0))
                         # 评审器产出结构化判定 → 发射 review_result 事件
                         review_data = {
                             "verdict": chunk.get("result", ""),

@@ -30,6 +30,7 @@ from .custom_opensandbox import CustomOpenSandbox
 from .sandbox_setup import SandboxConfig, create_secure_sandbox
 from ..config import SANDBOX_IDLE_TIMEOUT_MINUTES, SANDBOX_WARM_POOL_SIZE
 from ..log_utils import sandbox_logger
+from ..observability import measured
 
 
 # ============================================================
@@ -244,6 +245,7 @@ class SandboxManager:
         sandbox_logger.info(f"No warm/cached sandbox for {user_id}, creating new")
         return self._create_for_user(user_id)
 
+    @measured('sandbox.claim_attempt')
     def _claim_from_warm_pool(self, user_id: str) -> Optional[CustomOpenSandbox]:
         """从预热池中认领一个空闲容器"""
         with self._lock:
@@ -273,6 +275,7 @@ class SandboxManager:
 
         return None
 
+    @measured('sandbox.create')
     def _create_for_user(self, user_id: str) -> CustomOpenSandbox:
         """为用户创建新容器"""
         # 正常 Web 链路由 AgentLoader 串行创建；这里仍做二次检查，防止其他调用方
