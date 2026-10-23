@@ -59,7 +59,7 @@ def judge(case,erp,output,interrupts,error=None):
     return {'passed':all(checks.values()),'checks':checks}
 
 
-async def one(case):
+async def _one(case):
     from src.agent import main_agent as main
     from src.agent.config import get_llm
     from src.agent.schema import ProcurementContext
@@ -88,7 +88,8 @@ async def one(case):
         uid='eval-'+case['id'];tokens=bind_runtime(uid,store)
         try:
             graph=main.create_main_agent(ProcurementContext(user_id=uid,username='测试采购员'),InMemorySaver(),store)
-            config={'configurable':{'thread_id':case['id'],'user_id':uid},'callbacks':[usage],'recursion_limit':70}
+            from src.agent.observability import traced_config
+            config=traced_config({'configurable':{'thread_id':case['id'],'user_id':uid},'callbacks':[usage],'recursion_limit':70})
             async def conversation():
                 nonlocal state,output
                 state=await graph.ainvoke({'messages':[HumanMessage(content=case['prompt'])]},config)
@@ -120,6 +121,31 @@ async def one(case):
             'review_decision':state.get('review_decision'),'review_signals':state.get('_review_signals')}
     result.update(judge(case,erp,output,interrupts,error))
     return result
+
+
+async def one(case):
+    from src.agent.observability import Trace, _current
+    trace=Trace('synthetic-business-evaluation',case['id'])
+    token=_current.set(trace)
+    status='failed'
+    try:
+        result=await _one(case)
+        status='completed' if result['error'] is None else 'failed'
+        if trace.root:
+            result['trace_id']=trace.root.trace_id
+            try:
+                trace.root.update(metadata={'evaluation':True,'historical_import':False,
+                    'erp_environment':'in_process_fixture','case_id':case['id'],
+                    'kind':case['kind'],'passed':result['passed']})
+                for name,value in {'task_acceptance':result['passed'],**result['checks']}.items():
+                    trace.client.create_score(trace_id=trace.root.trace_id,name=name,
+                        value=int(value),data_type='BOOLEAN')
+            except Exception:
+                result['telemetry_score_error']=True
+        return result
+    finally:
+        trace.finish(status)
+        _current.reset(token)
 
 
 def summarize(rows):
@@ -158,6 +184,8 @@ async def run(args):
         if report['input_tokens']+report['output_tokens']>1000000:
             print('Token soft limit reached; remaining cases not run',flush=True);break
     print(json.dumps(summarize(rows),ensure_ascii=False),flush=True)
+    from src.agent.observability import shutdown
+    await shutdown()
 
 
 if __name__=='__main__':
