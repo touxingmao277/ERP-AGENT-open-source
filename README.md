@@ -18,6 +18,19 @@
 
 ---
 
+## 2026-10-23 更新：Langfuse 可观测性与真实模型验收
+
+- **可选元数据追踪**：新增 Langfuse 接入，默认关闭；缺少配置或依赖时业务照常执行。网页每次 stream/resume 生成独立 Trace，同一会话通过 HMAC 假名化的 session_id 关联，模型、工具与子链路按回调 run_id 建立父子关系。
+- **数据边界**：自定义回调只上报名称、耗时、状态、Token 用量与计数，不转发对话正文、工具参数、错误正文、订单数据、记忆正文或文件内容。一条真实请求的 201 条 observation 实测 input/output 均为空。业务拒绝与等待审批不算执行失败，完成状态也不等于任务验收成功。
+- **覆盖范围**：记录锁等待、首个用户可见 Token、结束状态、模型 Token、工具与审查决策、Grader 事件、HITL 中断/恢复、WARM 注入字符数、Skills 读取与目录耗时，以及沙箱创建/认领/健康与恢复耗时。
+- **评测接入与历史导入**：36 条业务用例与 400 条路由样本（200 样本 × 2 模型）以固定指标导入，统一标记 `historical_import`，不伪装为新执行，也不发送正文。
+- **真实模型业务验收**：模拟 ERP 环境下，12 类场景 × 3 变体共 36 条用例通过 36/36；记录 136 次模型响应，input 1,094,492 / output 30,267 tokens；单用例 P95 18.4 秒，审批前写入 0 次。
+- **真实链路与能力测试**：启动真实 FastAPI、MongoDB、Docker 与 MCP（23 个工具）完成 HTTP 流式冒烟；另通过真实 FastAPI → Agent → 模型 → MCP → Java ERP 完成 9 项能力测试，定位并修复 SSE 遗漏 `__interrupt__` 的问题，真实订单审批通过/拒绝复测通过，87 项组件回归通过。
+
+见 [Langfuse 接入说明](docs/LANGFUSE.md)、[真实模型验收记录](docs/LANGFUSE_LIVE_EVALUATION_20261023.md)、[Agent 能力实测](docs/AGENT_LIVE_TESTS_20261023.md)。
+
+以上为本地有限合成样本结果，不是线上 SLA 或泛化成功率；36 条用例是 12 类场景的数值变体，不是 36 个独立业务类型。Docker 自定义 seccomp 配置启动失败时会回退到基础沙箱，因此本轮不构成安全隔离或故障恢复验收。
+
 ## 2026-10-11 更新：业务验收与组件评测
 
 - **业务自动验收**：新增固定数据、确定性判定与逐题调用轨迹，覆盖 12 个场景及边界模板、36 条用例；两批首轮累计通过 36/36。使用真实 DeepSeek 模型与模拟 ERP，不代表线上或真实依赖全链路成功率。
@@ -107,6 +120,7 @@ TYPESAFE_MODEL=jev-1.13.0
 |------|------|------|
 | **LLM** | DeepSeek deepseek-flash | DeepSeek API（对话、grader、联网搜索共用） |
 | **审查路由** | DeepSeek / JEV 可配置切换 | 模糊请求前置判断；JEV 使用独立 TypeSafe Key |
+| **可观测性** | Langfuse（可选，默认关闭） | 元数据追踪、Token 用量与验收评分；不采集对话正文 |
 | **Agent 框架** | DeepAgent + LangGraph | 状态图引擎，支持中断/恢复/子Agent |
 | **MCP 协议** | FastMCP + SSE | Agent ↔ ERP 的工具桥接层 |
 | **Web 框架** | FastAPI + Uvicorn | SSE 流式响应 |
