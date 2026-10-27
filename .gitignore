@@ -37,6 +37,7 @@ src/download/
 *.log
 
 # ============ IDE / 系统 ============
+.worktrees/
 .vscode/
 .idea/
 .DS_Store
