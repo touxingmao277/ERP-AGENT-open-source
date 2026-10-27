@@ -440,6 +440,25 @@ mongod --dbpath /path/to/data
 docker run -d --name mongodb -p 27017:27017 mongo:6.0
 ```
 
+### 可选：启动本地内存测试 ERP
+
+测试 ERP 覆盖 MCP 使用的 23 个接口，数据为进程内合成数据，服务重启后恢复为种子状态。启动前先停止真实 Java ERP；服务只绑定 `127.0.0.1:8081`，如果端口已占用会启动失败，不会终止占用进程。
+
+终端 1 启动测试 ERP：
+
+```bash
+python -m evals.test_erp
+```
+
+终端 2 在启动 MCP 前，将测试地址仅设置到当前终端会话，再启动 MCP：
+
+```bash
+export ERP_BASE_URL=http://127.0.0.1:8081
+python -m src.mcp_server.server_main
+```
+
+PowerShell 对应命令为 `$env:ERP_BASE_URL = "http://127.0.0.1:8081"`。不要把该地址写入共享 `.env`；MCP 启动时读取该变量。真实 ERP 恢复使用后，重新启动 MCP 时移除该终端变量或设回真实地址。可通过 `http://127.0.0.1:8081/health` 检查测试服务。
+
 ### 4. 启动 Docker 沙箱容器
 
 ```bash
